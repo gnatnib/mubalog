@@ -102,7 +102,7 @@ const DEFAULT_DEEDS: Deed[] = [
 ]
 
 // Custom icons
-function Book(props) {
+function Book(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg
       {...props}
@@ -140,7 +140,7 @@ function Heart(props: React.SVGProps<SVGSVGElement>) {
   )
 }
 
-function Repeat(props) {
+function Repeat(props: React.SVGProps<SVGSVGElement>) {
   return (
     <svg
       {...props}
@@ -186,47 +186,84 @@ export default function GoodDeedsTracker() {
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
 
   useEffect(() => {
+    // Load saved data from localStorage
     const storedDeeds = localStorage.getItem("deeds")
+    const storedProgress = localStorage.getItem("deedsProgress")
+    const storedStreaks = localStorage.getItem("deedsStreaks")
+    const lastSavedDate = localStorage.getItem("lastDeedsDate")
+    const today = new Date().toISOString().split("T")[0]
+
+    // Initialize with stored data or defaults
     if (storedDeeds) {
       setDeeds(JSON.parse(storedDeeds))
     }
 
-    const storedProgress = localStorage.getItem("deedsProgress")
     if (storedProgress) {
-      setProgress(JSON.parse(storedProgress))
+      const parsedProgress = JSON.parse(storedProgress)
+
+      // If it's a new day, keep the history but reset today's progress
+      if (lastSavedDate !== today) {
+        Object.keys(parsedProgress).forEach((key) => {
+          const deedType = key as DeedType
+          // Keep the history but reset today's progress and completion status
+          parsedProgress[deedType] = {
+            ...parsedProgress[deedType],
+            progress: 0,
+            completed: false,
+          }
+        })
+      }
+      setProgress(parsedProgress)
+
+      // Update streaks based on history
+      const newStreaks = { ...streaks }
+      Object.keys(parsedProgress).forEach((key) => {
+        const deedType = key as DeedType
+        const deed = deeds.find((d) => d.type === deedType)
+        if (deed) {
+          newStreaks[deedType] = checkStreakContinuity(
+            parsedProgress[deedType].history,
+            parsedProgress[deedType].target,
+          )
+        }
+      })
+      setStreaks(newStreaks)
+      localStorage.setItem("deedsStreaks", JSON.stringify(newStreaks))
     }
 
-    const storedStreaks = localStorage.getItem("deedsStreaks")
     if (storedStreaks) {
       setStreaks(JSON.parse(storedStreaks))
     }
+  }, [deeds, streaks])
 
-    // Check if deeds were completed today
-    checkTodayCompletion()
-  }, [])
+  const checkStreakContinuity = (history: { date: string; value: number }[], target: number) => {
+    if (!history.length) return 0
 
-  const checkTodayCompletion = () => {
+    const dates = history
+      .filter((entry) => entry.value >= target)
+      .map((entry) => entry.date)
+      .sort()
+
+    if (!dates.length) return 0
+
     const today = new Date().toISOString().split("T")[0]
+    const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0]
 
-    const newProgress = { ...progress }
+    // If last completion was neither today nor yesterday, streak is broken
+    const lastDate = dates[dates.length - 1]
+    if (lastDate !== today && lastDate !== yesterday) return 0
 
-    Object.keys(newProgress).forEach((key) => {
-      const deedType = key as DeedType
-      const lastEntry = newProgress[deedType].history[newProgress[deedType].history.length - 1]
+    let streak = 1
+    for (let i = dates.length - 1; i > 0; i--) {
+      const curr = new Date(dates[i])
+      const prev = new Date(dates[i - 1])
+      const diffDays = Math.floor((curr.getTime() - prev.getTime()) / (1000 * 60 * 60 * 24))
 
-      if (lastEntry && lastEntry.date === today) {
-        const deed = deeds.find((d) => d.type === deedType)
-        if (deed && lastEntry.value >= newProgress[deedType].target) {
-          newProgress[deedType].completed = true
-        }
-      } else {
-        // Reset progress for a new day
-        newProgress[deedType].completed = false
-        newProgress[deedType].progress = 0
-      }
-    })
+      if (diffDays === 1) streak++
+      else break
+    }
 
-    setProgress(newProgress)
+    return streak
   }
 
   const updateProgress = (type: DeedType, amount: number) => {
@@ -234,7 +271,6 @@ export default function GoodDeedsTracker() {
     if (!deed) return
 
     const today = new Date().toISOString().split("T")[0]
-
     const newProgress = { ...progress }
     const deedProgress = newProgress[type]
 
@@ -243,34 +279,37 @@ export default function GoodDeedsTracker() {
       amount = -deedProgress.progress
     }
 
-    // Check if there's an entry for today
-    const todayEntryIndex = deedProgress.history.findIndex((entry) => entry.date === today)
+    // Update progress
+    const newValue = deedProgress.progress + amount
+    deedProgress.progress = newValue
 
+    // Update history
+    const todayEntryIndex = deedProgress.history.findIndex((entry) => entry.date === today)
     if (todayEntryIndex >= 0) {
-      // Update today's entry
-      deedProgress.history[todayEntryIndex].value += amount
-      deedProgress.progress = deedProgress.history[todayEntryIndex].value
+      deedProgress.history[todayEntryIndex].value = newValue
     } else {
-      // Create a new entry for today
-      deedProgress.history.push({ date: today, value: amount })
-      deedProgress.progress = amount
+      deedProgress.history.push({ date: today, value: newValue })
     }
 
-    // Check if the deed is completed for today
-    if (deedProgress.progress >= deedProgress.target && !deedProgress.completed) {
-      deedProgress.completed = true
+    // Check completion status
+    const wasCompletedBefore = deedProgress.completed
+    const isCompletedNow = newValue >= deedProgress.target
 
-      // Update streak
+    if (isCompletedNow && !wasCompletedBefore) {
+      deedProgress.completed = true
+      // Only increment streak for new completion
       const newStreaks = { ...streaks }
       newStreaks[type] += 1
       setStreaks(newStreaks)
       localStorage.setItem("deedsStreaks", JSON.stringify(newStreaks))
-    } else if (deedProgress.progress < deedProgress.target && deedProgress.completed) {
+    } else if (!isCompletedNow && wasCompletedBefore) {
       deedProgress.completed = false
     }
 
+    // Save all updates
     setProgress(newProgress)
     localStorage.setItem("deedsProgress", JSON.stringify(newProgress))
+    localStorage.setItem("lastDeedsDate", today)
   }
 
   const getProgressPercentage = (type: DeedType) => {
@@ -302,6 +341,39 @@ export default function GoodDeedsTracker() {
 
     setEditingDeed(null)
     setShowSettingsDialog(false)
+  }
+
+  const checkTodayCompletion = () => {
+    const today = new Date().toISOString().split("T")[0]
+    const newProgress = { ...progress }
+    const newStreaks = { ...streaks }
+
+    Object.keys(newProgress).forEach((key) => {
+      const deedType = key as DeedType
+      const lastEntry = newProgress[deedType].history[newProgress[deedType].history.length - 1]
+      const deed = deeds.find((d) => d.type === deedType)
+
+      if (lastEntry && lastEntry.date === today) {
+        if (deed && lastEntry.value >= newProgress[deedType].target) {
+          newProgress[deedType].completed = true
+          newProgress[deedType].progress = lastEntry.value
+        }
+      } else {
+        // Reset progress for a new day
+        newProgress[deedType].completed = false
+        newProgress[deedType].progress = 0
+      }
+
+      // Update streaks based on history
+      if (deed) {
+        newStreaks[deedType] = checkStreakContinuity(newProgress[deedType].history, newProgress[deedType].target)
+      }
+    })
+
+    setProgress(newProgress)
+    setStreaks(newStreaks)
+    localStorage.setItem("deedsProgress", JSON.stringify(newProgress))
+    localStorage.setItem("deedsStreaks", JSON.stringify(newStreaks))
   }
 
   return (
