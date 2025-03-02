@@ -1,5 +1,5 @@
-import { searchProvince } from "../../helper/Province"
-import { searchCity } from "../../helper/Network"
+import { searchProvince } from "../../../lib/province"
+import { searchCity } from "../../../lib/network"
 import type { NextApiRequest, NextApiResponse } from "next"
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
